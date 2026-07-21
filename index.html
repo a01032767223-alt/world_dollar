@@ -242,7 +242,7 @@
   </div>
 
   <footer>
-    <div>글로벌 자금 흐름 터미널 · 데이터 <span style="color:var(--ink-2)">Financial Modeling Prep</span> · 열 때마다 자동 갱신</div>
+    <div>글로벌 자금 흐름 터미널 · 데이터 <span style="color:var(--ink-2)">FMP(금리·원자재·지수·크립토) · ECB(달러인덱스 환율)</span> · 열 때마다 자동 갱신</div>
     <div class="disc">본 화면은 정보 제공용이며 투자 자문이 아닙니다. 자동 지표는 실시간 시세 기반이며, 종합의견은 거시국면 룰엔진의 규칙 기반 해석입니다. 투자 판단과 책임은 본인에게 있습니다.</div>
   </footer>
 </div>
@@ -253,14 +253,16 @@
    데이터: FMP (financialmodelingprep.com)  ·  키는 localStorage 저장
    ============================================================ */
 
+const FMP='https://financialmodelingprep.com/stable';           // 무료: Stable API
+const FRANK='https://api.frankfurter.dev/v1';                    // 키 불필요: ECB 환율
+
 const CFG = {
-  // FMP 심볼. ^ 지수는 자동 인코딩. 필요 시 아래만 바꾸면 됩니다.
-  sym: {
-    dxy:'^DXY', us10y:'^TNX', wti:'CLUSD', copper:'HGUSD',
-    gold:'GCUSD', brent:'BZUSD', sp500:'^GSPC', nasdaq:'^IXIC',
-    vix:'^VIX', btc:'BTCUSD', eth:'ETHUSD'
+  // FMP Stable 로 받는 심볼 (원자재·지수·크립토). 달러/금리는 별도 소스.
+  fmpSym: {
+    wti:'CLUSD', copper:'HGUSD', gold:'GCUSD', brent:'BZUSD',
+    sp500:'^GSPC', nasdaq:'^IXIC', vix:'^VIX', btc:'BTCUSD', eth:'ETHUSD'
   },
-  histFor: ['dxy','us10y','wti','copper','sp500','btc'], // 상관·스파크라인용 히스토리
+  histFor: ['dxy','us10y','wti','copper','btc'],  // 상관·스파크라인 대상
   histDays: 40
 };
 
@@ -282,29 +284,46 @@ const arrow=v=>v>0.02?'▲':v<-0.02?'▼':'■';
 
 let QUOTES={}, HIST={}, AUTO=null;
 
-/* ---------- FMP fetch ---------- */
-async function fmpQuotes(symbols, key){
-  const url=`https://financialmodelingprep.com/api/v3/quote/${symbols.map(enc).join(',')}?apikey=${key}`;
-  const r=await fetch(url);
-  if(!r.ok) throw new Error('quote '+r.status);
+/* ---------- FMP Stable: 단일 심볼 시세 (개별 호출 → 부분 실패 허용) ---------- */
+async function fmpQuote(symbol,key){
+  const r=await fetch(`${FMP}/quote?symbol=${enc(symbol)}&apikey=${key}`);
   const j=await r.json();
-  if(j['Error Message']) throw new Error(j['Error Message']);
-  return Array.isArray(j)?j:[];
+  if(j && j['Error Message']) throw new Error(j['Error Message']);
+  const q=Array.isArray(j)?j[0]:j;
+  if(!q||q.price==null) return null;
+  return {sym:q.symbol,name:q.name,price:q.price,
+          chg:q.change, chgP:q.changePercentage ?? q.changesPercentage};
 }
+/* ---------- FMP Stable: 일봉 종가 (light) ---------- */
 async function fmpHist(symbol,key,days){
-  const url=`https://financialmodelingprep.com/api/v3/historical-price-full/${enc(symbol)}?timeseries=${days}&apikey=${key}`;
-  const r=await fetch(url); if(!r.ok) return [];
+  const r=await fetch(`${FMP}/historical-price-eod/light?symbol=${enc(symbol)}&apikey=${key}`);
+  if(!r.ok) return [];
   const j=await r.json();
-  const h=(j.historical||[]).map(d=>d.close).reverse(); // 과거→최근
-  return h;
+  const arr=Array.isArray(j)?j:(j.historical||[]);
+  return arr.map(d=>d.price ?? d.close).filter(v=>v!=null).reverse().slice(-days); // 과거→최근
 }
-
-/* ---------- TNX 등 스케일 보정 (^TNX는 수익률×10) ---------- */
-function normQuote(map,q){
-  let price=q.price, chg=q.change, chgP=q.changesPercentage;
-  if(q.symbol==='^TNX'||q.symbol==='%5ETNX'){ if(price>15){price/=10; chg=chg/10;} }
-  return {sym:q.symbol,name:q.name,price,chg,chgP,prev:q.previousClose,
-          yLow:q.yearLow,yHigh:q.yearHigh};
+/* ---------- FMP Stable: 미 국채 금리 (무료) ---------- */
+async function fmpTreasury(key){
+  const r=await fetch(`${FMP}/treasury-rates?apikey=${key}`);
+  if(!r.ok) throw new Error('treasury '+r.status);
+  const j=await r.json();
+  if(j && j['Error Message']) throw new Error(j['Error Message']);
+  return Array.isArray(j)?j:[]; // 최신순 [{date, year10, year2, ...}]
+}
+/* ---------- Frankfurter(ECB): 진짜 DXY 계산 (키 불필요) ---------- */
+function calcDXY(r){ // r: USD기준 환율 (USD→통화)
+  const EURUSD=1/r.EUR, GBPUSD=1/r.GBP;
+  return 50.14348112*Math.pow(EURUSD,-0.576)*Math.pow(r.JPY,0.136)
+        *Math.pow(GBPUSD,-0.119)*Math.pow(r.CAD,0.091)
+        *Math.pow(r.SEK,0.042)*Math.pow(r.CHF,0.036);
+}
+async function dxySeries(days){
+  const iso=d=>d.toISOString().slice(0,10);
+  const end=new Date(), start=new Date(Date.now()-(days+20)*864e5);
+  const url=`${FRANK}/${iso(start)}..${iso(end)}?base=USD&symbols=EUR,JPY,GBP,CAD,SEK,CHF`;
+  const j=await (await fetch(url)).json();
+  const dates=Object.keys(j.rates||{}).sort();
+  return dates.map(d=>calcDXY(j.rates[d])); // 과거→최근
 }
 
 /* ============================================================
@@ -438,7 +457,9 @@ const META = {
   nasdaq:{nm:'나스닥',note:'성장·기술주'},
   vix:{nm:'VIX 공포지수',note:'변동성·위험 심리'},
   btc:{nm:'비트코인',note:'디지털 유동성'},
-  eth:{nm:'이더리움',note:'알트 위험선호'}
+  eth:{nm:'이더리움',note:'알트 위험선호'},
+  curve:{nm:'장단기 금리차',note:'10Y−2Y · 침체 선행'},
+  us2y:{nm:'미 2년물 금리',note:'연준 정책 반영'}
 };
 
 function sparkline(arr){
@@ -485,7 +506,21 @@ function coreCard(key){
 }
 function auxCard(key){
   const q=QUOTES[key], m=META[key];
-  if(!q) return `<div class="card dim"><div class="nm">${m.nm}</div><div class="px flat">—</div></div>`;
+  if(!q) return `<div class="card dim"><div class="nm">${m.nm}</div><div class="px flat">—</div><div class="meta">데이터 제한</div></div>`;
+  // 금리차: 레벨 자체가 신호(음수=역전=침체 경고). 색은 정상(양)=중립, 역전(음)=파랑 경고
+  if(key==='curve'){
+    const inv=q.price<0;
+    return `<div class="card dim">
+      <div class="nm">${m.nm}</div>
+      <div class="px tabnum ${inv?'down':''}">${q.price>=0?'+':''}${fmt(q.price,2)}%p</div>
+      <div class="chg ${inv?'down':'flat'}">${inv?'⚠ 수익률곡선 역전':'정상(우상향)'}</div>
+    </div>`;
+  }
+  if(m.unit==='%'||key==='us2y'){
+    return `<div class="card dim"><div class="nm">${m.nm}</div>
+      <div class="px tabnum">${fmt(q.price,2)}%</div>
+      <div class="chg ${cls(q.chgP)}">${arrow(q.chgP)} ${pctStr(q.chgP)}</div></div>`;
+  }
   const val=(m.unit==='$')?'$'+fmt(q.price,q.price>1000?0:2):fmt(q.price,q.price>1000?0:2);
   return `<div class="card dim">
     <div class="nm">${m.nm}</div>
@@ -600,45 +635,85 @@ async function loadAll(){
   if(!key){ $('#keyBanner').classList.add('show'); $('#settings').classList.add('open'); return; }
   $('#keyBanner').classList.remove('show');
   setLive('loading','불러오는 중…');
+  QUOTES={}; HIST={};
+  const fail=[];
 
-  try{
-    const S=CFG.sym;
-    const idxGroup=[S.dxy,S.us10y,S.vix,S.sp500,S.nasdaq];
-    const cmdGroup=[S.wti,S.copper,S.gold,S.brent];
-    const cxGroup =[S.btc,S.eth];
+  // 1) 달러인덱스 — ECB 환율로 진짜 DXY 계산 (키 불필요, 항상 우선)
+  const pDxy=(async()=>{
+    try{
+      const s=await dxySeries(CFG.histDays);
+      if(s.length>=2){
+        const last=s[s.length-1], prev=s[s.length-2];
+        QUOTES.dxy={sym:'DXY',name:'달러인덱스(ICE 산출)',price:last,
+                    chg:last-prev, chgP:(last-prev)/prev*100};
+        HIST.dxy=s.slice(-CFG.histDays);
+      } else fail.push('DXY');
+    }catch(e){ fail.push('DXY'); }
+  })();
 
-    const [idx,cmd,cx]=await Promise.all([
-      fmpQuotes(idxGroup,key), fmpQuotes(cmdGroup,key), fmpQuotes(cxGroup,key)
-    ]);
-    const all=[...idx,...cmd,...cx];
-    const bySym={}; all.forEach(q=>bySym[q.symbol]=q);
+  // 2) 미 국채 10Y·2Y — FMP treasury-rates (무료)
+  const pTsy=(async()=>{
+    try{
+      const t=await fmpTreasury(key);
+      if(t.length){
+        const cur=t[0], prev=t[1]||t[0];
+        const y10=+cur.year10, p10=+prev.year10;
+        QUOTES.us10y={sym:'US10Y',name:'미 10년물 금리',price:y10,
+                      chg:y10-p10, chgP:p10?(y10-p10)/p10*100:0};
+        if(cur.year2!=null){
+          const y2=+cur.year2;
+          QUOTES.us2y={sym:'US2Y',name:'미 2년물 금리',price:y2,
+                       chg:y2-(+((prev.year2)||y2)),chgP:0};
+          QUOTES.curve={sym:'2s10s',name:'장단기 금리차(10Y−2Y)',price:y10-y2,
+                        chg:0,chgP:0};
+        }
+        HIST.us10y=t.map(d=>+d.year10).filter(v=>!isNaN(v)).reverse().slice(-CFG.histDays);
+      } else fail.push('국채금리');
+    }catch(e){ fail.push('국채금리('+e.message+')'); }
+  })();
 
-    QUOTES={};
-    for(const [k,sym] of Object.entries(S)){
-      const q=bySym[sym]||bySym[sym.replace('^','%5E')]||bySym['^'+sym];
-      if(q) QUOTES[k]=normQuote(k,q);
-    }
+  // 3) FMP Stable 개별 시세 (원자재·지수·크립토) — 하나 실패해도 나머지 유지
+  const pQuotes=Object.entries(CFG.fmpSym).map(async([k,sym])=>{
+    try{ const q=await fmpQuote(sym,key); if(q) QUOTES[k]=q; else fail.push(META[k]?.nm||k); }
+    catch(e){ fail.push((META[k]?.nm||k)); QUOTES._err=e.message; }
+  });
 
-    // 히스토리 (상관·스파크라인)
-    HIST={};
-    await Promise.all(CFG.histFor.map(async k=>{
-      try{ HIST[k]=await fmpHist(S[k],key,CFG.histDays); }catch(e){ HIST[k]=[]; }
-    }));
+  // 4) 히스토리 (상관·스파크라인) — FMP 대상만
+  const pHist=CFG.histFor.filter(k=>k!=='dxy'&&k!=='us10y').map(async k=>{
+    const sym=CFG.fmpSym[k]; if(!sym) return;
+    try{ HIST[k]=await fmpHist(sym,key,CFG.histDays); }catch(e){ HIST[k]=[]; }
+  });
 
-    render();
-    setLive('live','업데이트 '+new Date().toLocaleString('ko-KR',{hour:'2-digit',minute:'2-digit',month:'numeric',day:'numeric'}));
-  }catch(e){
-    console.error(e);
-    setLive('err','오류: '+e.message);
+  await Promise.all([pDxy,pTsy,...pQuotes,...pHist]);
+
+  // 핵심 축(달러·금리·원자재)이 하나도 없으면 키/플랜 문제로 간주
+  const coreOK=QUOTES.dxy||QUOTES.us10y||QUOTES.wti||QUOTES.copper;
+  if(!coreOK){
+    setLive('err','데이터 로드 실패');
     $('#keyBanner').classList.add('show');
-    $('#keyBanner').innerHTML='<b>데이터를 불러오지 못했습니다.</b> API 키가 유효한지, 무료 플랜 한도(500MB/월)를 넘지 않았는지 확인하세요. ('+e.message+')';
+    $('#keyBanner').innerHTML='<b>데이터를 불러오지 못했습니다.</b> ⚙에서 FMP 키를 다시 확인하세요. '
+      +(QUOTES._err?('서버 응답: '+QUOTES._err):'키가 유효하지 않거나 일일 250회 한도를 초과했을 수 있습니다.');
+    return;
   }
+
+  // FMP 소스가 하나도 안 왔으면 키/플랜 문제 (DXY는 ECB라 별개로 뜸)
+  const fmpOK=QUOTES.us10y||QUOTES.wti||QUOTES.copper||QUOTES.gold||QUOTES.btc||QUOTES.eth;
+  if(!fmpOK){
+    $('#keyBanner').classList.add('show');
+    $('#keyBanner').innerHTML='<b>FMP 데이터가 오지 않습니다.</b> 달러인덱스는 ECB 환율로 표시되지만, 금리·원자재·크립토(FMP)는 비어 있습니다. '
+      +'⚙에서 키를 다시 확인하세요. '+(QUOTES._err?('서버 응답: '+QUOTES._err):'키 오타 또는 일일 250회 한도 초과일 수 있습니다.');
+  }
+
+  render();
+  let msg='업데이트 '+new Date().toLocaleString('ko-KR',{hour:'2-digit',minute:'2-digit',month:'numeric',day:'numeric'});
+  if(fail.length) msg+=' · 일부 제한: '+[...new Set(fail)].slice(0,4).join(', ');
+  setLive('live',msg);
 }
 
 function render(){
   // 핵심 3축(4카드) + 보조
   $('#coreGrid').innerHTML=['dxy','us10y','wti','copper'].map(coreCard).join('');
-  $('#auxGrid').innerHTML=['gold','brent','sp500','nasdaq','vix','btc','eth'].map(auxCard).join('');
+  $('#auxGrid').innerHTML=['curve','gold','brent','sp500','nasdaq','vix','btc','eth'].map(auxCard).join('');
 
   const R=computeRegime(QUOTES);
   $('#regimeName').textContent=R.name;
