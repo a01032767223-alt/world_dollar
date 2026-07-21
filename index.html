@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>글로벌 자금 흐름 터미널</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css">
+<style>
+  :root{
+    --bg:#080b11;
+    --bg2:#0c111a;
+    --panel:#111826;
+    --panel2:#0e141f;
+    --line:#1e293b;
+    --line-soft:#182234;
+    --ink:#e8eef7;
+    --ink-2:#aeb9c9;
+    --mute:#697588;
+    --up:#ff4b4b;      /* 상승 = 빨강 (국내 관례) */
+    --up-soft:#3a1d24;
+    --down:#4d8dff;    /* 하락 = 파랑 (국내 관례) */
+    --down-soft:#16263f;
+    --gold:#e7b64b;    /* 자금·국면 강조색 */
+    --gold-dim:#5a4a22;
+    --mono:"DM Mono",ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--bg);color:var(--ink);font-family:"Pretendard Variable",Pretendard,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  body{background:
+      radial-gradient(1200px 600px at 80% -10%, #0f1826 0%, transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, #101a1a 0%, transparent 55%),
+      var(--bg);
+    min-height:100vh;padding:22px 16px 60px}
+  .wrap{max-width:1180px;margin:0 auto}
+  .tabnum{font-family:var(--mono);font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+
+  /* ---------- header ---------- */
+  header.top{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:14px;margin-bottom:20px}
+  .brand{display:flex;align-items:center;gap:13px}
+  .brand .mark{width:42px;height:42px;flex:0 0 auto}
+  .brand h1{font-size:19px;font-weight:800;letter-spacing:-.02em;line-height:1.1}
+  .brand .sub{font-size:11.5px;color:var(--mute);letter-spacing:.04em;margin-top:3px}
+  .hstat{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .chip{font-size:11px;color:var(--ink-2);background:var(--panel);border:1px solid var(--line);
+    border-radius:999px;padding:6px 12px;display:flex;align-items:center;gap:7px;white-space:nowrap}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--mute)}
+  .dot.live{background:#37d67a;box-shadow:0 0 0 0 rgba(55,214,122,.6);animation:pulse 2s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(55,214,122,.5)}70%{box-shadow:0 0 0 7px rgba(55,214,122,0)}100%{box-shadow:0 0 0 0 rgba(55,214,122,0)}}
+  .btn{font-family:inherit;font-size:12px;font-weight:600;color:var(--ink);background:var(--panel);
+    border:1px solid var(--line);border-radius:9px;padding:7px 13px;cursor:pointer;transition:.15s}
+  .btn:hover{border-color:#2f4056;background:#141d2c}
+  .btn.gold{color:#1a1305;background:var(--gold);border-color:var(--gold)}
+  .btn.gold:hover{background:#f0c463}
+
+  /* ---------- regime hero (signature) ---------- */
+  .hero{background:linear-gradient(180deg,#0f1622,#0b1019);border:1px solid var(--line);
+    border-radius:18px;padding:20px 20px 8px;margin-bottom:16px;position:relative;overflow:hidden}
+  .hero::before{content:"";position:absolute;inset:0;background:
+    radial-gradient(600px 200px at 50% -30%, rgba(231,182,75,.10), transparent 70%);pointer-events:none}
+  .hero-head{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;margin-bottom:4px}
+  .eyebrow{font-size:11px;letter-spacing:.16em;color:var(--gold);font-weight:700;text-transform:uppercase}
+  .regime-name{font-size:23px;font-weight:800;letter-spacing:-.02em;margin-top:2px}
+  .regime-tag{font-size:12.5px;color:var(--ink-2);margin-top:5px;max-width:640px;line-height:1.5}
+  .risk-meter{text-align:right;min-width:150px}
+  .risk-meter .lbl{font-size:10.5px;letter-spacing:.1em;color:var(--mute);text-transform:uppercase}
+  .risk-meter .val{font-size:30px;font-weight:800;line-height:1;margin-top:2px}
+  .risk-meter .scale{font-size:10.5px;color:var(--mute);margin-top:3px}
+  #flowSvg{width:100%;height:auto;display:block;margin-top:6px}
+
+  /* ---------- instrument grid ---------- */
+  .section-label{font-size:12px;letter-spacing:.05em;color:var(--mute);font-weight:700;
+    margin:22px 4px 11px;display:flex;align-items:center;gap:9px}
+  .section-label::after{content:"";flex:1;height:1px;background:var(--line-soft)}
+  .grid{display:grid;gap:12px}
+  .grid.core{grid-template-columns:repeat(4,1fr)}
+  .grid.aux{grid-template-columns:repeat(4,1fr)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 14px 12px;
+    position:relative;overflow:hidden;min-height:150px}
+  .card.dim{min-height:auto;padding:12px 13px}
+  .card .nm{font-size:12.5px;color:var(--ink-2);font-weight:600;display:flex;align-items:center;gap:6px}
+  .card .sym{font-size:10px;color:var(--mute);font-family:var(--mono)}
+  .card .px{font-size:24px;font-weight:800;margin-top:7px;letter-spacing:-.01em}
+  .card.dim .px{font-size:19px;margin-top:4px}
+  .card .chg{font-size:12.5px;font-weight:700;margin-top:2px;font-family:var(--mono)}
+  .up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--mute)}
+  .spark{margin-top:8px;width:100%;height:34px;display:block}
+  .gauge{position:absolute;right:10px;top:10px;width:60px;height:38px}
+  .card .meta{font-size:10.5px;color:var(--mute);margin-top:7px;line-height:1.4}
+
+  /* ---------- opinion + impact ---------- */
+  .two{display:grid;grid-template-columns:1.35fr 1fr;gap:14px;margin-top:8px}
+  .block{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px}
+  .block h3{font-size:13px;font-weight:800;letter-spacing:.01em;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+  .block h3 .bar{width:3px;height:14px;background:var(--gold);border-radius:2px}
+  .opin h4{font-size:11px;letter-spacing:.09em;color:var(--gold);text-transform:uppercase;margin:14px 0 6px;font-weight:700}
+  .opin h4:first-of-type{margin-top:0}
+  .opin p{font-size:13px;line-height:1.68;color:var(--ink-2)}
+  .opin p strong{color:var(--ink);font-weight:700}
+  .opin ul{list-style:none;margin-top:4px}
+  .opin li{font-size:12.5px;line-height:1.6;color:var(--ink-2);padding-left:16px;position:relative;margin-top:5px}
+  .opin li::before{content:"";position:absolute;left:2px;top:8px;width:5px;height:5px;border-radius:50%;background:var(--gold)}
+
+  .impact-row{display:flex;align-items:center;justify-content:space-between;gap:10px;
+    padding:12px 0;border-bottom:1px solid var(--line-soft)}
+  .impact-row:last-child{border-bottom:none}
+  .impact-row .who{font-size:13.5px;font-weight:700}
+  .impact-row .who small{display:block;font-size:11px;color:var(--mute);font-weight:500;margin-top:2px}
+  .verdict{font-size:12px;font-weight:800;padding:5px 11px;border-radius:8px;white-space:nowrap}
+  .v-pos{color:var(--up);background:var(--up-soft)}
+  .v-neg{color:var(--down);background:var(--down-soft)}
+  .v-neu{color:var(--gold);background:#2b2410}
+
+  /* ---------- correlation ---------- */
+  .corr-wrap{overflow-x:auto}
+  table.corr{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:11px;min-width:520px}
+  table.corr th,table.corr td{padding:8px 6px;text-align:center;border:1px solid var(--line-soft)}
+  table.corr th{color:var(--ink-2);font-weight:600;background:var(--panel2);font-size:10.5px}
+  table.corr td.lbl{color:var(--ink-2);font-weight:600;background:var(--panel2);text-align:left;padding-left:10px;white-space:nowrap}
+  .corr-note{font-size:11.5px;color:var(--mute);margin-top:10px;line-height:1.5}
+
+  /* ---------- settings ---------- */
+  .settings{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:16px;margin-top:16px;display:none}
+  .settings.open{display:block}
+  .settings label{font-size:11.5px;color:var(--ink-2);display:block;margin-bottom:5px;font-weight:600}
+  .settings input{width:100%;background:#0a0f18;border:1px solid var(--line);border-radius:8px;
+    color:var(--ink);padding:9px 11px;font-family:var(--mono);font-size:12px}
+  .settings .row{margin-bottom:12px}
+  .settings .hint{font-size:11px;color:var(--mute);margin-top:6px;line-height:1.5}
+  .settings a{color:var(--gold);text-decoration:none}
+  .banner{background:#1a1206;border:1px solid var(--gold-dim);border-radius:12px;padding:13px 15px;
+    font-size:12.5px;color:#f0d9a4;margin-bottom:16px;line-height:1.5;display:none}
+  .banner.show{display:block}
+  .banner b{color:var(--gold)}
+  footer{margin-top:26px;text-align:center;font-size:11px;color:var(--mute);line-height:1.7}
+  footer .disc{max-width:640px;margin:8px auto 0;font-size:10.5px;opacity:.8}
+
+  @media(max-width:860px){
+    .grid.core,.grid.aux{grid-template-columns:repeat(2,1fr)}
+    .two{grid-template-columns:1fr}
+    .risk-meter{text-align:left}
+  }
+  @media(max-width:480px){
+    .grid.aux{grid-template-columns:repeat(2,1fr)}
+    .regime-name{font-size:19px}
+  }
+  @media(prefers-reduced-motion:reduce){*{animation:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="brand">
+      <svg class="mark" viewBox="0 0 44 44" fill="none">
+        <circle cx="22" cy="22" r="21" stroke="#e7b64b" stroke-width="1.4" opacity=".5"/>
+        <path d="M8 30 L17 20 L24 26 L36 12" stroke="#ff4b4b" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M8 34 L18 28 L25 32 L36 22" stroke="#4d8dff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" opacity=".85"/>
+        <circle cx="22" cy="22" r="3.4" fill="#e7b64b"/>
+      </svg>
+      <div>
+        <h1>글로벌 자금 흐름 터미널</h1>
+        <div class="sub">DOLLAR · RATES · COMMODITIES → EQUITY · CRYPTO</div>
+      </div>
+    </div>
+    <div class="hstat">
+      <span class="chip"><span class="dot" id="liveDot"></span><span id="updText">데이터 대기 중</span></span>
+      <button class="btn" id="autoBtn">자동 새로고침: 끔</button>
+      <button class="btn gold" id="refreshBtn">새로고침</button>
+      <button class="btn" id="setBtn">⚙</button>
+    </div>
+  </header>
+
+  <div class="banner" id="keyBanner">
+    <b>시작하려면 FMP API 키가 필요합니다.</b> 오른쪽 위 ⚙ 버튼 → 키 입력 후 저장하세요.
+    무료 키는 <a href="https://site.financialmodelingprep.com/developer/docs" target="_blank" rel="noopener">financialmodelingprep.com</a>에서 1분이면 발급됩니다.
+  </div>
+
+  <div class="settings" id="settings">
+    <div class="row">
+      <label>FMP API 키</label>
+      <input id="apiKeyInput" type="text" placeholder="여기에 API 키를 붙여넣기" autocomplete="off" spellcheck="false">
+      <div class="hint">
+        키는 이 브라우저에만 저장됩니다(localStorage). 공개 GitHub 저장소에 키를 코드로 하드코딩하지 마세요.
+        무료 발급: <a href="https://site.financialmodelingprep.com/developer/docs" target="_blank" rel="noopener">FMP Docs</a>
+      </div>
+    </div>
+    <button class="btn gold" id="saveKeyBtn">저장하고 불러오기</button>
+    <button class="btn" id="closeSetBtn" style="margin-left:6px">닫기</button>
+  </div>
+
+  <!-- ===== REGIME HERO ===== -->
+  <section class="hero">
+    <div class="hero-head">
+      <div>
+        <div class="eyebrow">Money-Flow Regime · 오늘의 자금 국면</div>
+        <div class="regime-name" id="regimeName">— 판정 대기 —</div>
+        <div class="regime-tag" id="regimeTag">데이터를 불러오면 세 드라이버(달러·금리·원자재)의 조합으로 국면을 판정합니다.</div>
+      </div>
+      <div class="risk-meter">
+        <div class="lbl">Risk Appetite</div>
+        <div class="val tabnum" id="riskVal">—</div>
+        <div class="scale">−100 리스크오프 · 리스크온 +100</div>
+      </div>
+    </div>
+    <svg id="flowSvg" viewBox="0 0 1000 240" role="img" aria-label="자금 흐름도"></svg>
+  </section>
+
+  <!-- ===== CORE 3 DRIVERS ===== -->
+  <div class="section-label">핵심 드라이버 · 돈의 흐름 3축</div>
+  <div class="grid core" id="coreGrid"></div>
+
+  <!-- ===== AUX ===== -->
+  <div class="section-label">보조 지표 · 국면 확인용</div>
+  <div class="grid aux" id="auxGrid"></div>
+
+  <!-- ===== OPINION + IMPACT ===== -->
+  <div class="two">
+    <div class="block opin">
+      <h3><span class="bar"></span>AI 종합의견</h3>
+      <div id="opinionBody">
+        <p style="color:var(--mute)">데이터를 불러오면 「요약 → 세부분석 → 결론·리스크」 순으로 종합 판단을 제시합니다.</p>
+      </div>
+    </div>
+    <div class="block">
+      <h3><span class="bar"></span>주식·크립토 영향</h3>
+      <div id="impactBody">
+        <p style="color:var(--mute);font-size:13px">국면 판정 후 자산군별 방향과 대응을 표시합니다.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== CORRELATION ===== -->
+  <div class="section-label">30일 상관관계 · 자금이 함께 움직인 정도</div>
+  <div class="block">
+    <div class="corr-wrap"><div id="corrBox"><p style="color:var(--mute);font-size:12.5px">데이터 로딩 후 실측 상관계수를 계산합니다.</p></div></div>
+    <div class="corr-note">
+      +1에 가까울수록 같은 방향, −1에 가까울수록 반대 방향으로 움직였습니다.
+      통상 <b style="color:var(--down)">달러↑ ↔ 위험자산↓</b>(음의 상관), <b style="color:var(--up)">구리↑ ↔ 경기민감주↑</b>(양의 상관)이 정상 국면입니다.
+      이 관계가 깨지면 국면 전환 신호로 봅니다.
+    </div>
+  </div>
+
+  <footer>
+    <div>글로벌 자금 흐름 터미널 · 데이터 <span style="color:var(--ink-2)">Financial Modeling Prep</span> · 열 때마다 자동 갱신</div>
+    <div class="disc">본 화면은 정보 제공용이며 투자 자문이 아닙니다. 자동 지표는 실시간 시세 기반이며, 종합의견은 거시국면 룰엔진의 규칙 기반 해석입니다. 투자 판단과 책임은 본인에게 있습니다.</div>
+  </footer>
+</div>
+
+<script>
+/* ============================================================
+   글로벌 자금 흐름 터미널  ·  단일 파일 / 정적 배포용
+   데이터: FMP (financialmodelingprep.com)  ·  키는 localStorage 저장
+   ============================================================ */
+
+const CFG = {
+  // FMP 심볼. ^ 지수는 자동 인코딩. 필요 시 아래만 바꾸면 됩니다.
+  sym: {
+    dxy:'^DXY', us10y:'^TNX', wti:'CLUSD', copper:'HGUSD',
+    gold:'GCUSD', brent:'BZUSD', sp500:'^GSPC', nasdaq:'^IXIC',
+    vix:'^VIX', btc:'BTCUSD', eth:'ETHUSD'
+  },
+  histFor: ['dxy','us10y','wti','copper','sp500','btc'], // 상관·스파크라인용 히스토리
+  histDays: 40
+};
+
+/* ---------- storage (artifact 환경에서도 안 깨지도록 방어) ---------- */
+const store = {
+  get(k){ try{return localStorage.getItem(k);}catch(e){return this._m&&this._m[k]||null;} },
+  set(k,v){ try{localStorage.setItem(k,v);}catch(e){(this._m=this._m||{})[k]=v;} },
+  _m:{}
+};
+const KEY_STORE='fmp_key';
+
+/* ---------- helpers ---------- */
+const $=s=>document.querySelector(s);
+const enc=s=>encodeURIComponent(s);
+const fmt=(n,d=2)=>n==null||isNaN(n)?'—':Number(n).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
+const pctStr=p=>p==null||isNaN(p)?'—':(p>=0?'+':'')+p.toFixed(2)+'%';
+const cls=v=>v>0.02?'up':v<-0.02?'down':'flat';
+const arrow=v=>v>0.02?'▲':v<-0.02?'▼':'■';
+
+let QUOTES={}, HIST={}, AUTO=null;
+
+/* ---------- FMP fetch ---------- */
+async function fmpQuotes(symbols, key){
+  const url=`https://financialmodelingprep.com/api/v3/quote/${symbols.map(enc).join(',')}?apikey=${key}`;
+  const r=await fetch(url);
+  if(!r.ok) throw new Error('quote '+r.status);
+  const j=await r.json();
+  if(j['Error Message']) throw new Error(j['Error Message']);
+  return Array.isArray(j)?j:[];
+}
+async function fmpHist(symbol,key,days){
+  const url=`https://financialmodelingprep.com/api/v3/historical-price-full/${enc(symbol)}?timeseries=${days}&apikey=${key}`;
+  const r=await fetch(url); if(!r.ok) return [];
+  const j=await r.json();
+  const h=(j.historical||[]).map(d=>d.close).reverse(); // 과거→최근
+  return h;
+}
+
+/* ---------- TNX 등 스케일 보정 (^TNX는 수익률×10) ---------- */
+function normQuote(map,q){
+  let price=q.price, chg=q.change, chgP=q.changesPercentage;
+  if(q.symbol==='^TNX'||q.symbol==='%5ETNX'){ if(price>15){price/=10; chg=chg/10;} }
+  return {sym:q.symbol,name:q.name,price,chg,chgP,prev:q.previousClose,
+          yLow:q.yearLow,yHigh:q.yearHigh};
+}
+
+/* ============================================================
+   REGIME ENGINE — 룰 기반 거시국면 판정
+   ============================================================ */
+function computeRegime(d){
+  // d: {dxy,us10y,wti,copper,gold,vix,...} 각각 {price,chg,chgP}
+  const dxyP   = d.dxy?.chgP ?? 0;
+  const tnxBp  = (d.us10y?.chg ?? 0)*100;      // 수익률 변화 → bp
+  const wtiP   = d.wti?.chgP ?? 0;
+  const cuP    = d.copper?.chgP ?? 0;
+  const vixLvl = d.vix?.price ?? 18;
+  const vixP   = d.vix?.chgP ?? 0;
+
+  // --- 부분 점수 (양수 = 위험자산 우호) ---
+  const sDollar = clamp(-dxyP*18, -30, 30);
+  const sRates  = clamp(-tnxBp*1.4, -25, 15);
+  const sCopper = clamp(cuP*9, -20, 20);
+  let sOil;
+  if(wtiP>3) sOil = clamp(-(wtiP-3)*4, -15, 0);          // 급등 = 인플레 부담
+  else if(wtiP>0 && cuP>0) sOil = clamp(wtiP*2.5, 0, 8); // 동반 상승 = 경기
+  else sOil = clamp(wtiP*2, -10, 6);
+  const sVix = clamp(-((vixLvl-18)*1.1 + vixP*0.4), -20, 8);
+
+  let risk = Math.round(clamp(sDollar+sRates+sCopper+sOil+sVix, -100, 100));
+
+  // --- 방향 태그 ---
+  const dir = {
+    dollar : dxyP>0.15?'강세':dxyP<-0.15?'약세':'횡보',
+    rates  : tnxBp>4?'급등':tnxBp>1?'상승':tnxBp<-4?'급락':tnxBp<-1?'하락':'안정',
+    copper : cuP>0.5?'확장':cuP<-0.5?'둔화':'횡보',
+    oil    : wtiP>2?'급등':wtiP>0.3?'상승':wtiP<-0.3?'하락':'횡보',
+    vix    : vixLvl>25?'공포':vixLvl>20?'경계':'안정'
+  };
+
+  // --- 국면 분류 ---
+  let name, tag, tone;
+  const strongDollar = dxyP>0.3, weakDollar=dxyP<-0.3;
+  const ratesUp = tnxBp>2, ratesDown=tnxBp<-2, ratesSpike=tnxBp>6;
+  const cuUp=cuP>0.4, cuDown=cuP<-0.4, oilUp=wtiP>1.5;
+
+  if(oilUp && ratesUp && cuDown){
+    name='스태그플레이션 경계'; tone='neg';
+    tag='물가(원유↑)는 오르는데 실물경기(구리↓)는 식는 최악 조합. 연준의 손발이 묶여 위험자산 전반에 가장 껄끄러운 국면입니다.';
+  }else if(ratesUp && (oilUp||cuUp) && !strongDollar){
+    name='리플레이션'; tone='mix';
+    tag='금리·원자재가 함께 오르는 경기·물가 동반 상승 국면. 경기민감주·원자재·에너지에 유리하나 고밸류 성장주엔 역풍입니다.';
+  }else if(strongDollar && ratesUp && risk<-25){
+    name='리스크오프 · 긴축'; tone='neg';
+    tag='달러 강세 + 금리 상승으로 글로벌 유동성이 미국으로 빨려 들어가는 국면. 신흥국·원자재·비트코인에 압력이 집중됩니다.';
+  }else if(cuDown && (ratesDown||strongDollar)){
+    name='경기둔화 · 방어 우위'; tone='neg';
+    tag='구리(실물경기)가 꺾이고 안전자산으로 돈이 이동하는 국면. 현금·미국채·금 등 방어자산이 상대적으로 우위입니다.';
+  }else if(risk>25 && (weakDollar||cuUp) && !ratesSpike){
+    name='리스크온 · 유동성 유입'; tone='pos';
+    tag='달러가 물러서고 경기 신호가 살아있어 위험자산으로 돈이 흐르는 국면. 성장주·비트코인에 우호적 환경입니다.';
+  }else{
+    name='혼조 · 중립'; tone='neu';
+    tag='드라이버 간 방향이 엇갈려 뚜렷한 자금 쏠림이 없는 관망 국면. 다음 촉매(고용·CPI·연준)까지 변동성 대응이 중요합니다.';
+  }
+
+  return {risk,name,tag,tone,dir,parts:{sDollar,sRates,sCopper,sOil,sVix},
+          raw:{dxyP,tnxBp,wtiP,cuP,vixLvl}};
+}
+function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
+
+/* ---------- 종합의견 텍스트 (요약→세부→결론·리스크) ---------- */
+function buildOpinion(R,d){
+  const {dir,risk,raw}=R;
+  const stance = risk>25?'위험자산 우호':risk<-25?'위험자산 경계':'중립';
+  const sumHtml=`<p><strong>${R.name}</strong> 국면입니다. 달러 <b>${dir.dollar}</b>, 10년물 금리 <b>${dir.rates}</b>(${raw.tnxBp>=0?'+':''}${raw.tnxBp.toFixed(0)}bp), 구리 <b>${dir.copper}</b>, 원유 <b>${dir.oil}</b>의 조합으로 리스크 성향은 <b>${risk>0?'+':''}${risk}</b>(${stance})로 읽힙니다.</p>`;
+
+  const detail=[];
+  detail.push(`달러인덱스 ${pctStr(raw.dxyP)} → ${raw.dxyP<0?'약세는 위험자산·원자재·비트코인에 유동성 순풍':raw.dxyP>0?'강세는 신흥국·원자재·코인에서 자금을 빨아들이는 역풍':'횡보로 방향성 중립'}.`);
+  detail.push(`10년물 금리 ${raw.tnxBp>=0?'+':''}${raw.tnxBp.toFixed(0)}bp → ${raw.tnxBp>4?'급등은 성장주·장기채·금 밸류에이션 압박':raw.tnxBp<-4?'급락은 완화 기대이나 경기침체 우려 양면성':'완만한 흐름으로 부담 제한적'}.`);
+  detail.push(`구리 ${pctStr(raw.cuP)} · 원유 ${pctStr(raw.wtiP)} → ${dir.copper==='확장'?'실물경기 확장 신호':dir.copper==='둔화'?'실물수요 둔화 경계':'경기 방향 혼재'}${raw.wtiP>2?', 유가 급등은 인플레·연준 매파 리스크':''}.`);
+  if(raw.vixLvl>20) detail.push(`VIX ${raw.vixLvl.toFixed(1)} → 시장 ${dir.vix}. 지수와 무관하게 방어적 자금 이동에 유의.`);
+
+  const risks=[];
+  if(dir.rates==='급등'||dir.rates==='상승') risks.push('금리 추가 상승 시 성장주·레버리지 자산 우선 조정 — 듀레이션·레버리지 노출 축소');
+  if(dir.dollar==='강세') risks.push('달러 추가 강세 시 비트코인·신흥국·원자재 동반 약세 — 방어자산 비중 유지');
+  if(raw.wtiP>2) risks.push('유가 급등 지속 시 인플레 재점화 → 연준 매파 전환 경계');
+  if(dir.copper==='둔화') risks.push('구리 약세 지속은 경기침체 선행 신호 — 경기민감주 비중 점검');
+  if(!risks.length) risks.push('뚜렷한 쏠림 부재 — 다음 매크로 이벤트(고용·CPI·FOMC) 전 과도한 베팅 자제');
+
+  return `<h4>요약</h4>${sumHtml}
+    <h4>세부 분석</h4><ul>${detail.map(x=>`<li>${x}</li>`).join('')}</ul>
+    <h4>결론 · 리스크 대응</h4><ul>${risks.map(x=>`<li>${x}</li>`).join('')}</ul>`;
+}
+
+/* ---------- 주식·크립토 영향 ---------- */
+function buildImpact(R){
+  const {dir,risk,raw}=R;
+  const rows=[];
+  const V=(t,c)=>`<span class="verdict ${c}">${t}</span>`;
+
+  // 성장주/기술주 — 금리·달러 민감
+  let g = -raw.tnxBp*1.2 - raw.dxyP*8 + (risk*0.3);
+  rows.push(['성장·기술주','금리·달러 민감', g>6?V('우호','v-pos'):g<-6?V('부담','v-neg'):V('중립','v-neu')]);
+
+  // 경기민감·원자재주 — 구리·유가
+  let cyc = raw.cuP*10 + (raw.wtiP>0?raw.wtiP*3:raw.wtiP*2);
+  rows.push(['경기민감·소재/에너지','구리·유가 연동', cyc>5?V('우호','v-pos'):cyc<-5?V('부담','v-neg'):V('중립','v-neu')]);
+
+  // 코스피/신흥국 — 달러 역상관 강함
+  let em = -raw.dxyP*14 + raw.cuP*6 + risk*0.25;
+  rows.push(['코스피·신흥국','달러 역상관 큼', em>6?V('우호','v-pos'):em<-6?V('부담','v-neg'):V('중립','v-neu')]);
+
+  // 비트코인 — 유동성·달러·리스크 총합
+  let btc = -raw.dxyP*16 - (raw.tnxBp>0?raw.tnxBp*0.8:0) + risk*0.5;
+  rows.push(['비트코인','유동성·달러 총합', btc>8?V('우호','v-pos'):btc<-8?V('부담','v-neg'):V('중립','v-neu')]);
+
+  // 금 — 실질금리·안전자산
+  let gold = -raw.tnxBp*0.9 + (dir.dollar==='강세'?-4:dir.dollar==='약세'?4:0) + (raw.vixLvl>22?5:0);
+  rows.push(['금(안전자산)','실질금리 역상관', gold>4?V('우호','v-pos'):gold<-4?V('부담','v-neg'):V('중립','v-neu')]);
+
+  return rows.map(([w,s,v])=>`<div class="impact-row"><div class="who">${w}<small>${s}</small></div>${v}</div>`).join('');
+}
+
+/* ============================================================
+   RENDER
+   ============================================================ */
+const META = {
+  dxy:{nm:'달러인덱스',note:'글로벌 유동성 수도꼭지'},
+  us10y:{nm:'미 10년물 금리',note:'세상 모든 자산의 할인율',unit:'%'},
+  wti:{nm:'WTI 원유',note:'인플레이션 방아쇠',unit:'$'},
+  copper:{nm:'구리 (Dr.Copper)',note:'실물경기 선행지표',unit:'$'},
+  gold:{nm:'금',note:'안전자산·실질금리',unit:'$'},
+  brent:{nm:'브렌트유',note:'국제 유가 기준',unit:'$'},
+  sp500:{nm:'S&P 500',note:'미국 대형주'},
+  nasdaq:{nm:'나스닥',note:'성장·기술주'},
+  vix:{nm:'VIX 공포지수',note:'변동성·위험 심리'},
+  btc:{nm:'비트코인',note:'디지털 유동성'},
+  eth:{nm:'이더리움',note:'알트 위험선호'}
+};
+
+function sparkline(arr){
+  if(!arr||arr.length<2) return '';
+  const w=150,h=34,pad=2;
+  const min=Math.min(...arr),max=Math.max(...arr),rng=(max-min)||1;
+  const pts=arr.map((v,i)=>{
+    const x=pad+(i/(arr.length-1))*(w-pad*2);
+    const y=h-pad-((v-min)/rng)*(h-pad*2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  const rise=arr[arr.length-1]>=arr[0];
+  const col=rise?'var(--up)':'var(--down)';
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+  </svg>`;
+}
+function gaugeSvg(chgP){
+  // 반원 바늘 게이지: ±3% → -90°..+90°, 빨강(우)=상승 파랑(좌)=하락
+  const v=clamp(chgP,-3,3), ang=(v/3)*90, rad=(ang-90)*Math.PI/180;
+  const cx=30,cy=34,r=24;
+  const nx=cx+r*Math.cos(rad), ny=cy+r*Math.sin(rad);
+  return `<svg class="gauge" viewBox="0 0 60 40">
+    <path d="M6 34 A24 24 0 0 1 30 10" fill="none" stroke="var(--down)" stroke-width="3" opacity=".5"/>
+    <path d="M30 10 A24 24 0 0 1 54 34" fill="none" stroke="var(--up)" stroke-width="3" opacity=".5"/>
+    <line x1="${cx}" y1="${cy}" x2="${nx.toFixed(1)}" y2="${ny.toFixed(1)}" stroke="${chgP>=0?'var(--up)':'var(--down)'}" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="${cx}" cy="${cy}" r="2.4" fill="#e8eef7"/>
+  </svg>`;
+}
+function coreCard(key){
+  const q=QUOTES[key], m=META[key];
+  if(!q) return `<div class="card"><div class="nm">${m.nm}</div><div class="px flat">—</div></div>`;
+  const unit=m.unit==='%'?'':(m.unit||'');
+  const val=(m.unit==='%')?fmt(q.price,3)+'%':(unit+fmt(q.price, q.price>1000?0:2));
+  return `<div class="card">
+    ${gaugeSvg(q.chgP)}
+    <div class="nm">${m.nm}</div>
+    <div class="sym">${q.sym.replace('%5E','^')}</div>
+    <div class="px tabnum">${val}</div>
+    <div class="chg ${cls(q.chgP)}">${arrow(q.chgP)} ${pctStr(q.chgP)}</div>
+    ${sparkline(HIST[key])}
+    <div class="meta">${m.note}</div>
+  </div>`;
+}
+function auxCard(key){
+  const q=QUOTES[key], m=META[key];
+  if(!q) return `<div class="card dim"><div class="nm">${m.nm}</div><div class="px flat">—</div></div>`;
+  const val=(m.unit==='$')?'$'+fmt(q.price,q.price>1000?0:2):fmt(q.price,q.price>1000?0:2);
+  return `<div class="card dim">
+    <div class="nm">${m.nm}</div>
+    <div class="px tabnum">${val}</div>
+    <div class="chg ${cls(q.chgP)}">${arrow(q.chgP)} ${pctStr(q.chgP)}</div>
+  </div>`;
+}
+
+/* ---------- 자금 흐름도 (signature SVG) ---------- */
+function drawFlow(R){
+  const svg=$('#flowSvg');
+  const srcs=[
+    {k:'dollar',label:'달러',y:55, val:pctStr(R.raw.dxyP)},
+    {k:'rates', label:'금리',y:120,val:(R.raw.tnxBp>=0?'+':'')+R.raw.tnxBp.toFixed(0)+'bp'},
+    {k:'comm',  label:'원자재',y:185,val:pctStr(R.raw.cuP)}
+  ];
+  const targets=[
+    {k:'eq', label:'주식', y:80},
+    {k:'cx', label:'크립토', y:160}
+  ];
+  // 각 소스가 위험자산에 주는 영향(+ 우호 / - 부담)
+  const infl={
+    dollar:-R.raw.dxyP*1, // 달러↑ → 위험자산 부담
+    rates : -R.raw.tnxBp*0.12,
+    comm  : R.raw.cuP*0.6 - (R.raw.wtiP>2?(R.raw.wtiP-2)*0.3:0)
+  };
+  const flowCol=v=>v>0.1?'var(--up)':v<-0.1?'var(--down)':'var(--mute)';
+  const flowW=v=>clamp(1.2+Math.abs(v)*2.2,1.2,6);
+
+  const coreX=500, srcX=150, tgtX=850;
+  let h='';
+  // 소스→코어
+  srcs.forEach(s=>{
+    const v=infl[s.k], c=flowCol(v), w=flowW(v);
+    h+=`<path d="M${srcX+58} ${s.y} C ${srcX+160} ${s.y}, ${coreX-120} 120, ${coreX-52} 120"
+         fill="none" stroke="${c}" stroke-width="${w}" opacity=".8"/>`;
+    // 노드
+    h+=`<g>
+      <rect x="${srcX-58}" y="${s.y-24}" width="116" height="48" rx="12" fill="#0e1622" stroke="var(--line)"/>
+      <text x="${srcX}" y="${s.y-3}" text-anchor="middle" fill="#aeb9c9" font-size="14" font-weight="700">${s.label}</text>
+      <text x="${srcX}" y="${s.y+15}" text-anchor="middle" fill="${flowCol(v)}" font-size="12" font-family="monospace">${s.val}</text>
+    </g>`;
+  });
+  // 코어→타겟
+  const eqImp = infl.dollar*0.7+infl.rates*1.1+infl.comm*0.9+R.risk*0.02;
+  const cxImp = infl.dollar*1.3+infl.rates*0.8+R.risk*0.04;
+  const impMap={eq:eqImp,cx:cxImp};
+  targets.forEach(t=>{
+    const v=impMap[t.k], c=flowCol(v), w=flowW(v);
+    h+=`<path d="M${coreX+52} 120 C ${coreX+120} 120, ${tgtX-160} ${t.y}, ${tgtX-58} ${t.y}"
+         fill="none" stroke="${c}" stroke-width="${w}" opacity=".85"/>`;
+    h+=`<g>
+      <rect x="${tgtX-58}" y="${t.y-24}" width="116" height="48" rx="12" fill="#0e1622" stroke="var(--line)"/>
+      <text x="${tgtX}" y="${t.y-3}" text-anchor="middle" fill="#e8eef7" font-size="14" font-weight="800">${t.label}</text>
+      <text x="${tgtX}" y="${t.y+15}" text-anchor="middle" fill="${c}" font-size="11">${v>0.1?'자금 유입':v<-0.1?'자금 유출':'중립'}</text>
+    </g>`;
+  });
+  // 코어 (레짐)
+  const toneCol=R.tone==='pos'?'var(--up)':R.tone==='neg'?'var(--down)':'var(--gold)';
+  h+=`<g>
+    <circle cx="${coreX}" cy="120" r="52" fill="#0c1220" stroke="${toneCol}" stroke-width="2"/>
+    <circle cx="${coreX}" cy="120" r="52" fill="none" stroke="${toneCol}" stroke-width="8" opacity=".12"/>
+    <text x="${coreX}" y="112" text-anchor="middle" fill="#8b96a8" font-size="10.5" letter-spacing="1">REGIME</text>
+    <text x="${coreX}" y="132" text-anchor="middle" fill="${toneCol}" font-size="20" font-weight="800" font-family="monospace">${R.risk>0?'+':''}${R.risk}</text>
+  </g>`;
+  svg.innerHTML=h;
+}
+
+/* ---------- 상관계수 ---------- */
+function pearson(a,b){
+  const n=Math.min(a.length,b.length); if(n<3) return null;
+  const A=a.slice(-n).map((v,i)=>a[a.length-n+i]);
+  // 일간 수익률로 변환
+  const ra=[],rb=[];
+  for(let i=1;i<n;i++){ ra.push((a[a.length-n+i]-a[a.length-n+i-1])); rb.push((b[b.length-n+i]-b[b.length-n+i-1])); }
+  const m=arr=>arr.reduce((s,x)=>s+x,0)/arr.length;
+  const ma=m(ra),mb=m(rb);
+  let num=0,da=0,db=0;
+  for(let i=0;i<ra.length;i++){num+=(ra[i]-ma)*(rb[i]-mb); da+=(ra[i]-ma)**2; db+=(rb[i]-mb)**2;}
+  if(da===0||db===0) return null;
+  return num/Math.sqrt(da*db);
+}
+function corrColor(v){
+  if(v==null) return 'transparent';
+  const a=Math.min(Math.abs(v),1);
+  return v>=0?`rgba(255,75,75,${0.12+a*0.5})`:`rgba(77,141,255,${0.12+a*0.5})`;
+}
+function renderCorr(){
+  const keys=CFG.histFor.filter(k=>HIST[k]&&HIST[k].length>3);
+  if(keys.length<2){ $('#corrBox').innerHTML='<p style="color:var(--mute);font-size:12.5px">상관 계산에 필요한 히스토리가 부족합니다.</p>'; return; }
+  const lab={dxy:'달러',us10y:'10Y금리',wti:'원유',copper:'구리',sp500:'S&P500',btc:'BTC'};
+  let h='<table class="corr"><thead><tr><th></th>';
+  keys.forEach(k=>h+=`<th>${lab[k]||k}</th>`); h+='</tr></thead><tbody>';
+  keys.forEach(r=>{
+    h+=`<tr><td class="lbl">${lab[r]||r}</td>`;
+    keys.forEach(c=>{
+      if(r===c){h+=`<td style="color:#4a5568">1.00</td>`;return;}
+      const v=pearson(HIST[r],HIST[c]);
+      h+=`<td style="background:${corrColor(v)};color:#e8eef7">${v==null?'—':v.toFixed(2)}</td>`;
+    });
+    h+='</tr>';
+  });
+  h+='</tbody></table>';
+  $('#corrBox').innerHTML=h;
+}
+
+/* ============================================================
+   LOAD
+   ============================================================ */
+async function loadAll(){
+  const key=(store.get(KEY_STORE)||'').trim();
+  if(!key){ $('#keyBanner').classList.add('show'); $('#settings').classList.add('open'); return; }
+  $('#keyBanner').classList.remove('show');
+  setLive('loading','불러오는 중…');
+
+  try{
+    const S=CFG.sym;
+    const idxGroup=[S.dxy,S.us10y,S.vix,S.sp500,S.nasdaq];
+    const cmdGroup=[S.wti,S.copper,S.gold,S.brent];
+    const cxGroup =[S.btc,S.eth];
+
+    const [idx,cmd,cx]=await Promise.all([
+      fmpQuotes(idxGroup,key), fmpQuotes(cmdGroup,key), fmpQuotes(cxGroup,key)
+    ]);
+    const all=[...idx,...cmd,...cx];
+    const bySym={}; all.forEach(q=>bySym[q.symbol]=q);
+
+    QUOTES={};
+    for(const [k,sym] of Object.entries(S)){
+      const q=bySym[sym]||bySym[sym.replace('^','%5E')]||bySym['^'+sym];
+      if(q) QUOTES[k]=normQuote(k,q);
+    }
+
+    // 히스토리 (상관·스파크라인)
+    HIST={};
+    await Promise.all(CFG.histFor.map(async k=>{
+      try{ HIST[k]=await fmpHist(S[k],key,CFG.histDays); }catch(e){ HIST[k]=[]; }
+    }));
+
+    render();
+    setLive('live','업데이트 '+new Date().toLocaleString('ko-KR',{hour:'2-digit',minute:'2-digit',month:'numeric',day:'numeric'}));
+  }catch(e){
+    console.error(e);
+    setLive('err','오류: '+e.message);
+    $('#keyBanner').classList.add('show');
+    $('#keyBanner').innerHTML='<b>데이터를 불러오지 못했습니다.</b> API 키가 유효한지, 무료 플랜 한도(500MB/월)를 넘지 않았는지 확인하세요. ('+e.message+')';
+  }
+}
+
+function render(){
+  // 핵심 3축(4카드) + 보조
+  $('#coreGrid').innerHTML=['dxy','us10y','wti','copper'].map(coreCard).join('');
+  $('#auxGrid').innerHTML=['gold','brent','sp500','nasdaq','vix','btc','eth'].map(auxCard).join('');
+
+  const R=computeRegime(QUOTES);
+  $('#regimeName').textContent=R.name;
+  $('#regimeTag').textContent=R.tag;
+  const rv=$('#riskVal'); rv.textContent=(R.risk>0?'+':'')+R.risk;
+  rv.className='val tabnum '+(R.risk>15?'up':R.risk<-15?'down':'flat');
+
+  drawFlow(R);
+  $('#opinionBody').innerHTML=buildOpinion(R,QUOTES);
+  $('#impactBody').innerHTML=buildImpact(R);
+  renderCorr();
+}
+
+function setLive(state,txt){
+  const dot=$('#liveDot');
+  dot.className='dot'+(state==='live'?' live':'');
+  if(state==='err') dot.style.background='var(--down)';
+  else if(state==='loading') dot.style.background='var(--gold)';
+  $('#updText').textContent=txt;
+}
+
+/* ---------- events ---------- */
+$('#setBtn').onclick=()=>$('#settings').classList.toggle('open');
+$('#closeSetBtn').onclick=()=>$('#settings').classList.remove('open');
+$('#saveKeyBtn').onclick=()=>{
+  const v=$('#apiKeyInput').value.trim();
+  if(v){ store.set(KEY_STORE,v); $('#settings').classList.remove('open'); loadAll(); }
+};
+$('#refreshBtn').onclick=loadAll;
+$('#autoBtn').onclick=function(){
+  if(AUTO){ clearInterval(AUTO); AUTO=null; this.textContent='자동 새로고침: 끔'; }
+  else{ AUTO=setInterval(loadAll,120000); this.textContent='자동 새로고침: 2분'; loadAll(); }
+};
+
+// 초기화
+(function init(){
+  const k=store.get(KEY_STORE);
+  if(k) $('#apiKeyInput').value=k;
+  loadAll();
+})();
+</script>
+</body>
+</html>
