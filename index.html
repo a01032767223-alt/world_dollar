@@ -257,12 +257,12 @@ const FMP='https://financialmodelingprep.com/stable';           // 무료: Stabl
 const FRANK='https://api.frankfurter.dev/v1';                    // 키 불필요: ECB 환율
 
 const CFG = {
-  // 원자재: 전용 배치 엔드포인트로 받고, 표기가 달라도 잡히도록 후보군 지정
+  // 원자재: FMP 목록에서 '이름'으로 실제 심볼을 찾고, 못 찾으면 후보 심볼로 조회
   commod: {
-    wti:   ['CLUSD','WTIUSD','USOIL','CL=F'],
-    copper:['HGUSD','COPPERUSD','HG=F'],
-    gold:  ['GCUSD','XAUUSD','GC=F'],
-    brent: ['BZUSD','BRENTUSD','BZ=F']
+    wti:   {name:/crude|wti/i, exclude:/brent/i,     cand:['CLUSD','WTIUSD','USOIL','OILUSD']},
+    copper:{name:/copper/i,                           cand:['HGUSD','COPPERUSD']},
+    gold:  {name:/gold/i,      exclude:/mini|micro/i, cand:['GCUSD','XAUUSD']},
+    brent: {name:/brent/i,                            cand:['BZUSD','BRENTUSD']}
   },
   // 일반 quote 엔드포인트로 받는 심볼 (지수·크립토)
   quoteSym: {
@@ -292,20 +292,19 @@ const cleanKey=s=>(s||'').trim().replace(/^[?&]?apikey=/i,'').replace(/["'\s]/g,
 
 let QUOTES={}, HIST={}, AUTO=null;
 
-/* ---------- FMP Stable: 원자재 배치 (전용 엔드포인트, 무료) ---------- */
-async function fmpCommodities(key){
-  const r=await fetch(`${FMP}/all-commodities-quotes?apikey=${key}`);
-  if(!r.ok) throw new Error('commodities '+r.status);
+/* ---------- FMP Stable: 원자재 목록 (이름→실제 심볼 해석용) ---------- */
+async function commodityList(key){
+  const r=await fetch(`${FMP}/commodities-list?apikey=${key}`);
+  if(!r.ok) return [];
   const j=await r.json();
-  if(j && j['Error Message']) throw new Error(j['Error Message']);
-  const map={}; (Array.isArray(j)?j:[]).forEach(q=>{ if(q&&q.symbol) map[q.symbol.toUpperCase()]=q; });
-  return map;
+  return Array.isArray(j)?j:[];
 }
-function normQ(q){
-  if(!q||q.price==null) return null;
-  let chgP=q.changePercentage ?? q.changesPercentage;
-  if(chgP==null && q.change!=null){ const prev=q.price-q.change; chgP=prev?q.change/prev*100:0; }
-  return {sym:q.symbol,name:q.name,price:q.price,chg:q.change,chgP:chgP??0};
+/* 후보 심볼을 순서대로 조회, 처음 성공한 것 반환 */
+async function quoteFirst(cands,key){
+  for(const s of cands){
+    try{ const q=await fmpQuote(s,key); if(q) return q; }catch(e){}
+  }
+  return null;
 }
 /* ---------- FMP Stable: 단일 심볼 시세 (개별 호출 → 부분 실패 허용) ---------- */
 async function fmpQuote(symbol,key){
@@ -314,8 +313,9 @@ async function fmpQuote(symbol,key){
   if(j && j['Error Message']) throw new Error(j['Error Message']);
   const q=Array.isArray(j)?j[0]:j;
   if(!q||q.price==null) return null;
-  return {sym:q.symbol,name:q.name,price:q.price,
-          chg:q.change, chgP:q.changePercentage ?? q.changesPercentage};
+  let chgP=q.changePercentage ?? q.changesPercentage;
+  if(chgP==null && q.change!=null){ const prev=q.price-q.change; chgP=prev?q.change/prev*100:0; }
+  return {sym:q.symbol,name:q.name,price:q.price,chg:q.change,chgP:chgP??0};
 }
 /* ---------- FMP Stable: 일봉 종가 (light) ---------- */
 async function fmpHist(symbol,key,days){
@@ -695,16 +695,25 @@ async function loadAll(){
     }catch(e){ fail.push('국채금리('+e.message+')'); }
   })();
 
-  // 3a) 원자재 — 전용 배치 엔드포인트 (원유·구리·금·브렌트)
+  // 3a) 원자재 — FMP 목록에서 이름으로 실제 심볼 해석 → 개별 조회 (원유·구리·금·브렌트)
   const pCommod=(async()=>{
-    try{
-      const map=await fmpCommodities(key);
-      for(const [k,cands] of Object.entries(CFG.commod)){
-        const hit=cands.map(s=>s.toUpperCase()).find(s=>map[s]);
-        const q=hit?normQ(map[hit]):null;
-        if(q) QUOTES[k]=q; else fail.push(META[k]?.nm||k);
-      }
-    }catch(e){ ['wti','copper','gold','brent'].forEach(k=>fail.push(META[k]?.nm||k)); QUOTES._err=e.message; }
+    let list=[];
+    try{ list=await commodityList(key); }catch(e){}
+    const byName=(re,not)=>{
+      const m=list.find(c=>c&&c.symbol&&re.test(c.name||'')&&(!not||!not.test(c.name||'')));
+      return m?m.symbol:null;
+    };
+    await Promise.all(Object.entries(CFG.commod).map(async([k,def])=>{
+      const cands=[];
+      const hit=byName(def.name,def.exclude);
+      if(hit) cands.push(hit);
+      def.cand.forEach(s=>{ if(!cands.includes(s)) cands.push(s); });
+      const q=await quoteFirst(cands,key);
+      if(q){
+        QUOTES[k]=q;
+        if(k==='wti'||k==='copper'){ try{ HIST[k]=await fmpHist(q.sym,key,CFG.histDays); }catch(e){} }
+      } else fail.push(META[k]?.nm||k);
+    }));
   })();
 
   // 3b) 지수·크립토 — 일반 quote 엔드포인트
@@ -713,12 +722,8 @@ async function loadAll(){
     catch(e){ fail.push((META[k]?.nm||k)); QUOTES._err=e.message; }
   });
 
-  // 4) 히스토리 (상관·스파크라인) — 실패해도 무방
-  const pHist=[
-    (async()=>{ try{ HIST.btc=await fmpHist('BTCUSD',key,CFG.histDays); }catch(e){ HIST.btc=[]; } })(),
-    (async()=>{ try{ HIST.wti=await fmpHist(CFG.commod.wti[0],key,CFG.histDays); }catch(e){ HIST.wti=[]; } })(),
-    (async()=>{ try{ HIST.copper=await fmpHist(CFG.commod.copper[0],key,CFG.histDays); }catch(e){ HIST.copper=[]; } })()
-  ];
+  // 4) BTC 히스토리 (상관·스파크라인) — 실패해도 무방
+  const pHist=[(async()=>{ try{ HIST.btc=await fmpHist('BTCUSD',key,CFG.histDays); }catch(e){ HIST.btc=[]; } })()];
 
   await Promise.all([pDxy,pTsy,pCommod,...pQuotes,...pHist]);
 
