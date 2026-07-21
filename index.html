@@ -281,6 +281,8 @@ const fmt=(n,d=2)=>n==null||isNaN(n)?'—':Number(n).toLocaleString('en-US',{min
 const pctStr=p=>p==null||isNaN(p)?'—':(p>=0?'+':'')+p.toFixed(2)+'%';
 const cls=v=>v>0.02?'up':v<-0.02?'down':'flat';
 const arrow=v=>v>0.02?'▲':v<-0.02?'▼':'■';
+// 붙여넣기 실수 정리: '?apikey=' 접두어·따옴표·공백 제거
+const cleanKey=s=>(s||'').trim().replace(/^[?&]?apikey=/i,'').replace(/["'\s]/g,'');
 
 let QUOTES={}, HIST={}, AUTO=null;
 
@@ -631,7 +633,7 @@ function renderCorr(){
    LOAD
    ============================================================ */
 async function loadAll(){
-  const key=(store.get(KEY_STORE)||'').trim();
+  const key=cleanKey(store.get(KEY_STORE)||'');
   if(!key){ $('#keyBanner').classList.add('show'); $('#settings').classList.add('open'); return; }
   $('#keyBanner').classList.remove('show');
   setLive('loading','불러오는 중…');
@@ -739,8 +741,8 @@ function setLive(state,txt){
 $('#setBtn').onclick=()=>$('#settings').classList.toggle('open');
 $('#closeSetBtn').onclick=()=>$('#settings').classList.remove('open');
 $('#saveKeyBtn').onclick=()=>{
-  const v=$('#apiKeyInput').value.trim();
-  if(v){ store.set(KEY_STORE,v); $('#settings').classList.remove('open'); loadAll(); }
+  const v=cleanKey($('#apiKeyInput').value);
+  if(v){ $('#apiKeyInput').value=v; store.set(KEY_STORE,v); $('#settings').classList.remove('open'); loadAll(); }
 };
 $('#refreshBtn').onclick=loadAll;
 $('#autoBtn').onclick=function(){
