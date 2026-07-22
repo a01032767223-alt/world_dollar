@@ -242,7 +242,7 @@
   </div>
 
   <footer>
-    <div>글로벌 자금 흐름 터미널 · 데이터 <span style="color:var(--ink-2)">FMP(금리·원자재·지수·크립토) · ECB(달러인덱스 환율)</span> · 열 때마다 자동 갱신</div>
+    <div>글로벌 자금 흐름 터미널 · 데이터 <span style="color:var(--ink-2)">FMP · ECB(달러) · Yahoo(원자재 예비)</span> · 열 때마다 자동 갱신</div>
     <div class="disc">본 화면은 정보 제공용이며 투자 자문이 아닙니다. 자동 지표는 실시간 시세 기반이며, 종합의견은 거시국면 룰엔진의 규칙 기반 해석입니다. 투자 판단과 책임은 본인에게 있습니다.</div>
   </footer>
 </div>
@@ -257,12 +257,12 @@ const FMP='https://financialmodelingprep.com/stable';           // 무료: Stabl
 const FRANK='https://api.frankfurter.dev/v1';                    // 키 불필요: ECB 환율
 
 const CFG = {
-  // 원자재: FMP 목록에서 '이름'으로 실제 심볼을 찾고, 못 찾으면 후보 심볼로 조회
+  // 원자재: ①FMP 목록 이름검색 ②FMP 후보심볼 ③야후(키 불필요) 순으로 시도
   commod: {
-    wti:   {name:/crude|wti/i, exclude:/brent/i,     cand:['CLUSD','WTIUSD','USOIL','OILUSD']},
-    copper:{name:/copper/i,                           cand:['HGUSD','COPPERUSD']},
-    gold:  {name:/gold/i,      exclude:/mini|micro/i, cand:['GCUSD','XAUUSD']},
-    brent: {name:/brent/i,                            cand:['BZUSD','BRENTUSD']}
+    wti:   {name:/crude|wti/i, exclude:/brent/i,     cand:['CLUSD','WTIUSD','USOIL','OILUSD'], ysym:'CL=F'},
+    copper:{name:/copper/i,                           cand:['HGUSD','COPPERUSD'],              ysym:'HG=F'},
+    gold:  {name:/gold/i,      exclude:/mini|micro/i, cand:['GCUSD','XAUUSD'],                 ysym:'GC=F'},
+    brent: {name:/brent/i,                            cand:['BZUSD','BRENTUSD'],               ysym:'BZ=F'}
   },
   // 일반 quote 엔드포인트로 받는 심볼 (지수·크립토)
   quoteSym: {
@@ -292,6 +292,19 @@ const cleanKey=s=>(s||'').trim().replace(/^[?&]?apikey=/i,'').replace(/["'\s]/g,
 
 let QUOTES={}, HIST={}, AUTO=null;
 
+/* ---------- 야후 파이낸스 (CORS 프록시 경유, 키 불필요) — 원자재 예비 소스 ---------- */
+async function yahooChart(ysym){
+  const y=`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ysym)}?range=2mo&interval=1d`;
+  const r=await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(y)}`);
+  if(!r.ok) throw new Error('yahoo '+r.status);
+  const txt=await r.text(); let j;
+  try{ j=JSON.parse(txt); }catch(e){ throw new Error('yahoo parse'); }
+  const res=j&&j.chart&&j.chart.result&&j.chart.result[0];
+  if(!res||!res.meta) throw new Error('yahoo empty');
+  const m=res.meta, price=m.regularMarketPrice, prev=m.chartPreviousClose ?? m.previousClose ?? price;
+  const closes=((res.indicators&&res.indicators.quote&&res.indicators.quote[0]&&res.indicators.quote[0].close)||[]).filter(v=>v!=null);
+  return {price, chg:price-prev, chgP:prev?(price-prev)/prev*100:0, hist:closes};
+}
 /* ---------- FMP Stable: 원자재 목록 (이름→실제 심볼 해석용) ---------- */
 async function commodityList(key){
   const r=await fetch(`${FMP}/commodities-list?apikey=${key}`);
@@ -708,10 +721,16 @@ async function loadAll(){
       const hit=byName(def.name,def.exclude);
       if(hit) cands.push(hit);
       def.cand.forEach(s=>{ if(!cands.includes(s)) cands.push(s); });
-      const q=await quoteFirst(cands,key);
+      let q=await quoteFirst(cands,key);
       if(q){
         QUOTES[k]=q;
         if(k==='wti'||k==='copper'){ try{ HIST[k]=await fmpHist(q.sym,key,CFG.histDays); }catch(e){} }
+      } else if(def.ysym){                       // FMP가 안 주면 야후로
+        try{
+          const y=await yahooChart(def.ysym);
+          QUOTES[k]={sym:def.ysym,name:META[k].nm,price:y.price,chg:y.chg,chgP:y.chgP};
+          if(y.hist.length) HIST[k]=y.hist.slice(-CFG.histDays);
+        }catch(e){ fail.push(META[k]?.nm||k); }
       } else fail.push(META[k]?.nm||k);
     }));
   })();
