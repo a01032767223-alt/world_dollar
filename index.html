@@ -333,7 +333,16 @@ const arrow=v=>v>0.02?'▲':v<-0.02?'▼':'■';
 // 붙여넣기 실수 정리: '?apikey=' 접두어·따옴표·공백 제거
 const cleanKey=s=>(s||'').trim().replace(/^[?&]?apikey=/i,'').replace(/["'\s]/g,'');
 
-let QUOTES={}, HIST={}, AUTO=null;
+let QUOTES={}, HIST={}, AUTO=null, RATE_LIMITED=false;
+
+/* ---------- 마지막 정상 데이터 캐시 (한도 초과·오류 시 화면 유지) ---------- */
+const CACHE_KEY='mf_cache_v1';
+function cacheSave(){
+  try{ store.set(CACHE_KEY, JSON.stringify({t:Date.now(),q:QUOTES,h:HIST})); }catch(e){}
+}
+function cacheLoad(){
+  try{ const c=JSON.parse(store.get(CACHE_KEY)||'null'); return c&&c.q?c:null; }catch(e){ return null; }
+}
 
 /* ---------- 야후 파이낸스 (CORS 프록시 경유, 키 불필요) — 원자재 예비 소스 ---------- */
 async function yahooChart(ysym){
@@ -366,7 +375,7 @@ async function quoteFirst(cands,key){
 async function fmpQuote(symbol,key){
   const r=await fetch(`${FMP}/quote?symbol=${enc(symbol)}&apikey=${key}`);
   const j=await r.json();
-  if(j && j['Error Message']) throw new Error(j['Error Message']);
+  if(j && j['Error Message']){ if(/limit/i.test(j['Error Message'])) RATE_LIMITED=true; throw new Error(j['Error Message']); }
   const q=Array.isArray(j)?j[0]:j;
   if(!q||q.price==null) return null;
   let chgP=q.changePercentage ?? q.changesPercentage;
@@ -386,7 +395,7 @@ async function fmpTreasury(key){
   const r=await fetch(`${FMP}/treasury-rates?apikey=${key}`);
   if(!r.ok) throw new Error('treasury '+r.status);
   const j=await r.json();
-  if(j && j['Error Message']) throw new Error(j['Error Message']);
+  if(j && j['Error Message']){ if(/limit/i.test(j['Error Message'])) RATE_LIMITED=true; throw new Error(j['Error Message']); }
   return Array.isArray(j)?j:[]; // 최신순 [{date, year10, year2, ...}]
 }
 /* ---------- Frankfurter(ECB): 진짜 DXY 계산 (키 불필요) ---------- */
@@ -826,107 +835,110 @@ function renderCorr(){
 /* ============================================================
    LOAD
    ============================================================ */
-async function loadAll(){
+async function loadAll(force){
   const key=cleanKey(store.get(KEY_STORE)||'');
   if(!key){ $('#keyBanner').classList.add('show'); $('#settings').classList.add('open'); return; }
   $('#keyBanner').classList.remove('show');
-  setLive('loading','불러오는 중…');
-  QUOTES={}; HIST={};
-  const fail=[];
 
-  // 1) 달러인덱스 — ECB 환율로 진짜 DXY 계산 (키 불필요, 항상 우선)
+  // 캐시 우선: 있으면 즉시 표시(화면이 절대 비지 않음)
+  const cached=cacheLoad();
+  if(cached){ QUOTES={...cached.q}; HIST={...cached.h}; render(); }
+
+  // 최근 8분 내 갱신했고 강제 새로고침이 아니면 네트워크 호출 생략(한도 절약)
+  const fresh = cached && (Date.now()-cached.t < 8*60*1000);
+  if(fresh && !force){
+    setLive('live','저장된 데이터 · '+new Date(cached.t).toLocaleString('ko-KR',{hour:'2-digit',minute:'2-digit',month:'numeric',day:'numeric'}));
+    return;
+  }
+
+  setLive('loading','불러오는 중…');
+  RATE_LIMITED=false;
+  const NQ={}, NH={};              // 이번에 새로 받은 값
+  const fail=[]; let lastErr='';
+
+  // 1) 달러인덱스 — ECB (키 불필요)
   const pDxy=(async()=>{
     try{
       const s=await dxySeries(CFG.histDays);
-      if(s.length>=2){
-        const last=s[s.length-1], prev=s[s.length-2];
-        QUOTES.dxy={sym:'DXY',name:'달러인덱스(ICE 산출)',price:last,
-                    chg:last-prev, chgP:(last-prev)/prev*100};
-        HIST.dxy=s.slice(-CFG.histDays);
-      } else fail.push('DXY');
-    }catch(e){ fail.push('DXY'); }
+      if(s.length>=2){ const a=s[s.length-1], p=s[s.length-2];
+        NQ.dxy={sym:'DXY',name:'달러인덱스(ICE 산출)',price:a,chg:a-p,chgP:(a-p)/p*100};
+        NH.dxy=s.slice(-CFG.histDays);
+      }
+    }catch(e){}
   })();
 
-  // 2) 미 국채 10Y·2Y — FMP treasury-rates (무료)
+  // 2) 미 국채 10Y·2Y — FMP treasury-rates
   const pTsy=(async()=>{
     try{
       const t=await fmpTreasury(key);
       if(t.length){
-        const cur=t[0], prev=t[1]||t[0];
-        const y10=+cur.year10, p10=+prev.year10;
-        QUOTES.us10y={sym:'US10Y',name:'미 10년물 금리',price:y10,
-                      chg:y10-p10, chgP:p10?(y10-p10)/p10*100:0};
-        if(cur.year2!=null){
-          const y2=+cur.year2;
-          QUOTES.us2y={sym:'US2Y',name:'미 2년물 금리',price:y2,
-                       chg:y2-(+((prev.year2)||y2)),chgP:0};
-          QUOTES.curve={sym:'2s10s',name:'장단기 금리차(10Y−2Y)',price:y10-y2,
-                        chg:0,chgP:0};
+        const cur=t[0], prev=t[1]||t[0], y10=+cur.year10, p10=+prev.year10;
+        NQ.us10y={sym:'US10Y',name:'미 10년물 금리',price:y10,chg:y10-p10,chgP:p10?(y10-p10)/p10*100:0};
+        if(cur.year2!=null){ const y2=+cur.year2;
+          NQ.us2y={sym:'US2Y',name:'미 2년물 금리',price:y2,chg:y2-(+((prev.year2)||y2)),chgP:0};
+          NQ.curve={sym:'2s10s',name:'장단기 금리차(10Y−2Y)',price:y10-y2,chg:0,chgP:0};
         }
-        HIST.us10y=t.map(d=>+d.year10).filter(v=>!isNaN(v)).reverse().slice(-CFG.histDays);
-      } else fail.push('국채금리');
-    }catch(e){ fail.push('국채금리('+e.message+')'); }
+        NH.us10y=t.map(d=>+d.year10).filter(v=>!isNaN(v)).reverse().slice(-CFG.histDays);
+      }
+    }catch(e){ fail.push('국채금리'); lastErr=e.message; }
   })();
 
-  // 3a) 원자재 — FMP 목록에서 이름으로 실제 심볼 해석 → 개별 조회 (원유·구리·금·브렌트)
+  // 3a) 원자재 — 해석된 심볼 캐시 사용 → FMP quote, 실패 시 야후(히스토리 포함)
+  const symCache=JSON.parse(store.get('mf_commod_sym')||'{}');
   const pCommod=(async()=>{
-    let list=[];
-    try{ list=await commodityList(key); }catch(e){}
-    const byName=(re,not)=>{
-      const m=list.find(c=>c&&c.symbol&&re.test(c.name||'')&&(!not||!not.test(c.name||'')));
-      return m?m.symbol:null;
-    };
+    let list=null;
+    const getList=async()=>{ if(list===null){ try{ list=await commodityList(key); }catch(e){ list=[]; } } return list; };
+    const byName=async(re,not)=>{ const L=await getList();
+      const m=L.find(c=>c&&c.symbol&&re.test(c.name||'')&&(!not||!not.test(c.name||''))); return m?m.symbol:null; };
     await Promise.all(Object.entries(CFG.commod).map(async([k,def])=>{
       const cands=[];
-      const hit=byName(def.name,def.exclude);
-      if(hit) cands.push(hit);
+      if(symCache[k]) cands.push(symCache[k]);                 // 지난번 성공 심볼 우선
       def.cand.forEach(s=>{ if(!cands.includes(s)) cands.push(s); });
       let q=await quoteFirst(cands,key);
-      if(q){
-        QUOTES[k]=q;
-        if(k==='wti'||k==='copper'){ try{ HIST[k]=await fmpHist(q.sym,key,CFG.histDays); }catch(e){} }
-      } else if(def.ysym){                       // FMP가 안 주면 야후로
-        try{
-          const y=await yahooChart(def.ysym);
-          QUOTES[k]={sym:def.ysym,name:META[k].nm,price:y.price,chg:y.chg,chgP:y.chgP};
-          if(y.hist.length) HIST[k]=y.hist.slice(-CFG.histDays);
+      if(!q){ const hit=await byName(def.name,def.exclude); if(hit) q=await quoteFirst([hit],key); }
+      if(q){ NQ[k]=q; symCache[k]=q.sym; }
+      else if(def.ysym){                                       // FMP 안 되면 야후(무료·히스토리 포함)
+        try{ const y=await yahooChart(def.ysym);
+          NQ[k]={sym:def.ysym,name:META[k].nm,price:y.price,chg:y.chg,chgP:y.chgP};
+          if(y.hist.length) NH[k]=y.hist.slice(-CFG.histDays);
         }catch(e){ fail.push(META[k]?.nm||k); }
       } else fail.push(META[k]?.nm||k);
     }));
+    try{ store.set('mf_commod_sym',JSON.stringify(symCache)); }catch(e){}
   })();
 
-  // 3b) 지수·크립토 — 일반 quote 엔드포인트
+  // 3b) 지수·크립토 — 일반 quote
   const pQuotes=Object.entries(CFG.quoteSym).map(async([k,sym])=>{
-    try{ const q=await fmpQuote(sym,key); if(q) QUOTES[k]=q; else fail.push(META[k]?.nm||k); }
-    catch(e){ fail.push((META[k]?.nm||k)); QUOTES._err=e.message; }
+    try{ const q=await fmpQuote(sym,key); if(q) NQ[k]=q; else fail.push(META[k]?.nm||k); }
+    catch(e){ fail.push(META[k]?.nm||k); lastErr=e.message; }
   });
 
-  // 4) BTC 히스토리 (상관·스파크라인) — 실패해도 무방
-  const pHist=[(async()=>{ try{ HIST.btc=await fmpHist('BTCUSD',key,CFG.histDays); }catch(e){ HIST.btc=[]; } })()];
+  await Promise.all([pDxy,pTsy,pCommod,...pQuotes]);
 
-  await Promise.all([pDxy,pTsy,pCommod,...pQuotes,...pHist]);
+  // 새로 받은 값으로 갱신하되, 못 받은 항목은 캐시 값 유지(화면 유지)
+  const gotAny = Object.keys(NQ).length>0;
+  QUOTES = cached ? {...cached.q, ...NQ} : {...NQ};
+  HIST   = cached ? {...cached.h, ...NH} : {...NH};
 
-  // 핵심 축(달러·금리·원자재)이 하나도 없으면 키/플랜 문제로 간주
-  const coreOK=QUOTES.dxy||QUOTES.us10y||QUOTES.wti||QUOTES.copper;
-  if(!coreOK){
-    setLive('err','데이터 로드 실패');
+  if(gotAny) cacheSave();
+  render();
+
+  // 상태·배너
+  if(RATE_LIMITED){
+    setLive('err','FMP 일일 한도 초과');
     $('#keyBanner').classList.add('show');
-    $('#keyBanner').innerHTML='<b>데이터를 불러오지 못했습니다.</b> ⚙에서 FMP 키를 다시 확인하세요. '
-      +(QUOTES._err?('서버 응답: '+QUOTES._err):'키가 유효하지 않거나 일일 250회 한도를 초과했을 수 있습니다.');
+    $('#keyBanner').innerHTML='<b>FMP 무료 일일 한도(250회)에 도달했습니다.</b> 화면은 마지막으로 저장된 값을 보여드리고 있습니다. '
+      +'한도는 보통 하루 뒤 리셋됩니다. 자주 새로고침하지 않으면(이 앱은 8분 캐시로 호출을 아낍니다) 한도에 잘 걸리지 않습니다.';
     return;
   }
-
-  // FMP 소스가 하나도 안 왔으면 키/플랜 문제 (DXY는 ECB라 별개로 뜸)
-  const fmpOK=QUOTES.us10y||QUOTES.wti||QUOTES.copper||QUOTES.gold||QUOTES.btc||QUOTES.eth;
-  if(!fmpOK){
+  const fmpOK=NQ.us10y||NQ.wti||NQ.copper||NQ.gold||NQ.btc||NQ.eth;
+  if(!fmpOK && !cached){
     $('#keyBanner').classList.add('show');
-    $('#keyBanner').innerHTML='<b>FMP 데이터가 오지 않습니다.</b> 달러인덱스는 ECB 환율로 표시되지만, 금리·원자재·크립토(FMP)는 비어 있습니다. '
-      +'⚙에서 키를 다시 확인하세요. '+(QUOTES._err?('서버 응답: '+QUOTES._err):'키 오타 또는 일일 250회 한도 초과일 수 있습니다.');
+    $('#keyBanner').innerHTML='<b>FMP 데이터가 오지 않습니다.</b> 달러인덱스는 ECB로 표시됩니다. ⚙에서 키를 확인하세요. '
+      +(lastErr?('서버 응답: '+lastErr):'키 오타 또는 일일 한도 초과일 수 있습니다.');
   }
-
-  render();
   let msg='업데이트 '+new Date().toLocaleString('ko-KR',{hour:'2-digit',minute:'2-digit',month:'numeric',day:'numeric'});
-  if(fail.length) msg+=' · 일부 제한: '+[...new Set(fail)].slice(0,4).join(', ');
+  if(fail.length) msg+=' · 일부 제한: '+[...new Set(fail)].slice(0,3).join(', ');
   setLive('live',msg);
 }
 
@@ -961,12 +973,12 @@ $('#setBtn').onclick=()=>$('#settings').classList.toggle('open');
 $('#closeSetBtn').onclick=()=>$('#settings').classList.remove('open');
 $('#saveKeyBtn').onclick=()=>{
   const v=cleanKey($('#apiKeyInput').value);
-  if(v){ $('#apiKeyInput').value=v; store.set(KEY_STORE,v); $('#settings').classList.remove('open'); loadAll(); }
+  if(v){ $('#apiKeyInput').value=v; store.set(KEY_STORE,v); $('#settings').classList.remove('open'); loadAll(true); }
 };
-$('#refreshBtn').onclick=loadAll;
+$('#refreshBtn').onclick=()=>loadAll(true);
 $('#autoBtn').onclick=function(){
   if(AUTO){ clearInterval(AUTO); AUTO=null; this.textContent='자동 새로고침: 끔'; }
-  else{ AUTO=setInterval(loadAll,120000); this.textContent='자동 새로고침: 2분'; loadAll(); }
+  else{ AUTO=setInterval(()=>loadAll(false),10*60*1000); this.textContent='자동 새로고침: 10분'; loadAll(true); }
 };
 
 // 초기화
